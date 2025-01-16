@@ -936,6 +936,7 @@ type UpdateObjectMetadataParams struct {
 	EncryptedMetadataNonce        storj.Nonce
 	EncryptedMetadata             []byte
 	EncryptedMetadataEncryptedKey []byte
+	ClearMetadata                 []byte
 }
 
 func (params *UpdateObjectMetadataParams) toRequest(header *pb.RequestHeader) *pb.ObjectUpdateMetadataRequest {
@@ -947,6 +948,7 @@ func (params *UpdateObjectMetadataParams) toRequest(header *pb.RequestHeader) *p
 		EncryptedMetadataNonce:        params.EncryptedMetadataNonce,
 		EncryptedMetadata:             params.EncryptedMetadata,
 		EncryptedMetadataEncryptedKey: params.EncryptedMetadataEncryptedKey,
+		ClearMetadata:                 params.ClearMetadata,
 	}
 }
 

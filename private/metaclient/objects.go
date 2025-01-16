@@ -157,31 +157,46 @@ func (db *DB) UpdateObjectMetadata(ctx context.Context, bucket, key string, newM
 		return err
 	}
 
+	// marshal+encrypt metadata
+	_, _, base := db.encStore.LookupUnencrypted(bucket, paths.NewUnencrypted(key))
+	metadataCipher := base.MetadataCipher
+
 	var encryptedKeyNonce storj.Nonce
-	// generate random nonce for encrypting the metadata key
-	_, err = rand.Read(encryptedKeyNonce[:])
-	if err != nil {
-		return err
-	}
+	var encryptedKey []byte
+	var streamMetaBytes []byte
+	var clearMetadata []byte
 
-	encryptionParameters := objectInfo.EncryptionParameters
-	encryptedKey, err := encryption.EncryptKey(&metadataKey, encryptionParameters.CipherSuite, derivedKey, &encryptedKeyNonce)
-	if err != nil {
-		return err
-	}
+	if metadataCipher == storj.EncNull {
+		clearMetadata, err = usermeta.Marshal(usermeta.UserMeta(newMetadata))
+		if err != nil {
+			return err
+		}
+	} else {
+		// encrypt metadata with the content encryption key and zero nonce.
 
-	// encrypt metadata with the content encryption key and zero nonce.
-	encryptedStreamInfo, err := encryption.Encrypt(streamInfo, encryptionParameters.CipherSuite, &metadataKey, &storj.Nonce{})
-	if err != nil {
-		return err
-	}
+		// generate random nonce for encrypting the metadata key
+		_, err = rand.Read(encryptedKeyNonce[:])
+		if err != nil {
+			return err
+		}
 
-	// TODO should we commit StreamMeta or commit only encrypted StreamInfo
-	streamMetaBytes, err := pb.Marshal(&pb.StreamMeta{
-		EncryptedStreamInfo: encryptedStreamInfo,
-	})
-	if err != nil {
-		return err
+		encryptionParameters := objectInfo.EncryptionParameters
+		encryptedKey, err = encryption.EncryptKey(&metadataKey, encryptionParameters.CipherSuite, derivedKey, &encryptedKeyNonce)
+		if err != nil {
+			return err
+		}
+
+		encryptedStreamInfo, err := encryption.Encrypt(streamInfo, encryptionParameters.CipherSuite, &metadataKey, &storj.Nonce{})
+		if err != nil {
+			return err
+		}
+
+		streamMetaBytes, err = pb.Marshal(&pb.StreamMeta{
+			EncryptedStreamInfo: encryptedStreamInfo,
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	return db.metainfo.UpdateObjectMetadata(ctx, UpdateObjectMetadataParams{
@@ -191,6 +206,7 @@ func (db *DB) UpdateObjectMetadata(ctx context.Context, bucket, key string, newM
 		EncryptedMetadata:             streamMetaBytes,
 		EncryptedMetadataEncryptedKey: encryptedKey,
 		EncryptedMetadataNonce:        encryptedKeyNonce,
+		ClearMetadata:                 clearMetadata,
 	})
 }
 
