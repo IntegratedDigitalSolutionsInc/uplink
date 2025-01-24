@@ -310,6 +310,31 @@ type ObjectList struct {
 	Items []Object
 }
 
+// FindObjectsByMetadataOptions represents options for the FindObjectsByMetadata request.
+type FindObjectsByMetadataOptions struct {
+	Prefix        storj.Path
+	Cursor        storj.Path
+	CursorEnc     []byte
+	VersionCursor []byte
+	Limit         int
+	Queries       []MetadataQuery
+}
+
+// NextPage returns options for querying the next page by metadata.
+func (opts FindObjectsByMetadataOptions) NextPage(list ObjectList) FindObjectsByMetadataOptions {
+	if !list.More {
+		return FindObjectsByMetadataOptions{}
+	}
+
+	return FindObjectsByMetadataOptions{
+		Prefix:        opts.Prefix,
+		CursorEnc:     list.Cursor,
+		VersionCursor: list.VersionCursor,
+		Limit:         opts.Limit,
+		Queries:       opts.Queries,
+	}
+}
+
 // BucketList is a list of buckets.
 type BucketList struct {
 	More  bool

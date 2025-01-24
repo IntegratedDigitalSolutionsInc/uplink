@@ -6,7 +6,9 @@ package metaclient
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -498,6 +500,9 @@ func (db *DB) ListObjects(ctx context.Context, bucket string, options ListOption
 	}
 	versionCursor := options.VersionCursor
 
+	fmt.Printf("### ListObjects: prefix=%s\n", options.Prefix)
+	fmt.Println(hex.Dump([]byte(pi.ParentEnc.Raw())))
+
 	var m bool
 	var objectsList []Object
 	// Keep looking until we find an object we can decrypt or we run out of objects
@@ -586,6 +591,72 @@ func (db *DB) objectsFromRawObjectList(ctx context.Context, items []RawObjectLis
 	}
 
 	return objectList, nil
+}
+
+// FindObjectsByMetadata lists objects that have the requested metadata values and prefix.
+func (db *DB) FindObjectsByMetadata(ctx context.Context, bucket string, options FindObjectsByMetadataOptions) (list ObjectList, err error) {
+	defer mon.Task()(&ctx)(&err)
+
+	// Validate input parameters
+	if bucket == "" {
+		return ObjectList{}, ErrNoBucket.New("")
+	}
+
+	if options.Prefix != "" && !strings.HasSuffix(options.Prefix, "/") {
+		return ObjectList{}, errClass.New("prefix should end with slash")
+	}
+
+	// Generate input options
+	startAfter := options.Cursor
+	pi, err := encryption.GetPrefixInfo(bucket, paths.NewUnencrypted(options.Prefix), db.encStore)
+	if err != nil {
+		return ObjectList{}, errClass.Wrap(err)
+	}
+
+	startAfter, err = encryption.EncryptPathRaw(startAfter, pi.Cipher, &pi.ParentKey)
+	if err != nil {
+		return ObjectList{}, errClass.Wrap(err)
+	}
+
+	startAfterEnc := []byte(startAfter)
+	if len(options.CursorEnc) > 0 {
+		startAfterEnc = options.CursorEnc
+	}
+	versionCursor := options.VersionCursor
+
+	fmt.Printf("### FindObjectsByMetadata: prefix=%s\n", options.Prefix)
+	fmt.Println(hex.Dump([]byte(pi.ParentEnc.Raw())))
+
+	// Run query. Note: unlike in ListObjects, we might return an empty list
+	// even if there are more items. This is because the post-DB call filtering
+	// may remove all the items.
+
+	resp, err := db.metainfo.FindObjectsByMetadata(ctx, FindObjectsByMetadataParams{
+		Bucket:          []byte(bucket),
+		EncryptedPrefix: []byte(pi.ParentEnc.Raw()),
+		EncryptedCursor: startAfterEnc,
+		VersionCursor:   versionCursor,
+		Limit:           int32(options.Limit),
+		Queries:         options.Queries,
+	})
+
+	if err != nil {
+		return ObjectList{}, errClass.Wrap(err)
+	}
+
+	objectList, err := db.objectsFromRawObjectList(ctx, resp.Items, pi)
+	if err != nil {
+		return ObjectList{}, errClass.Wrap(err)
+	}
+
+	return ObjectList{
+		Bucket:        bucket,
+		Prefix:        options.Prefix,
+		More:          resp.More,
+		Items:         objectList,
+		Cursor:        resp.Cursor,
+		VersionCursor: resp.VersionCursor,
+	}, nil
 }
 
 // DownloadOptions contains additional options for downloading.

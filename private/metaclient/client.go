@@ -6,6 +6,7 @@ package metaclient
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"sync"
@@ -1315,6 +1316,141 @@ func (client *Client) ListObjects(ctx context.Context, params ListObjectsParams)
 
 	listResponse := newListObjectsResponse(response.ObjectList, params.EncryptedPrefix, params.Recursive)
 	return listResponse.Items, listResponse.More, Error.Wrap(err)
+}
+
+// MetadataQuery defines a single query for the FindObjecsByMetadata method.
+type MetadataQuery interface {
+	toQuery() (*pb.MetadataQuery, error)
+}
+
+// MetadataQueryMatchValues defines a query that matches metadata values.
+type MetadataQueryMatchValues struct {
+	Values map[string]interface{}
+}
+
+func (query MetadataQueryMatchValues) toQuery() (*pb.MetadataQuery, error) {
+	bytes, err := json.Marshal(query.Values)
+	if err != nil {
+		return nil, Error.Wrap(err)
+	}
+
+	return &pb.MetadataQuery{
+		QueryType:  pb.MetadataQuery_JSON_MATCH,
+		QueryValue: bytes,
+	}, nil
+}
+
+// MetadataQueryJMESPathFilter defines a query that filters metadata using a JMESPath expression.
+type MetadataQueryJMESPathFilter struct {
+	Expression string
+}
+
+func (query MetadataQueryJMESPathFilter) toQuery() (*pb.MetadataQuery, error) {
+	return &pb.MetadataQuery{
+		QueryType:  pb.MetadataQuery_JMESPATH_FILTER,
+		QueryValue: []byte(query.Expression),
+	}, nil
+}
+
+// MetadataQueryJMESPathProjection defines a query that applies a projection to
+// metadata using a JMESPath expression.
+type MetadataQueryJMESPathProjection struct {
+	Expression string
+}
+
+func (query MetadataQueryJMESPathProjection) toQuery() (*pb.MetadataQuery, error) {
+	return &pb.MetadataQuery{
+		QueryType:  pb.MetadataQuery_JMESPATH_PROJECTION,
+		QueryValue: []byte(query.Expression),
+	}, nil
+}
+
+// FindObjectsByMetadataParams parameters for FindObjectsByMetadata method.
+type FindObjectsByMetadataParams struct {
+	Bucket          []byte
+	EncryptedPrefix []byte
+	EncryptedCursor []byte
+	VersionCursor   []byte
+	Limit           int32
+	Queries         []MetadataQuery
+}
+
+func (params *FindObjectsByMetadataParams) toRequest(header *pb.RequestHeader) (*pb.FindObjectsByMetadataRequest, error) {
+	queries := make([]*pb.MetadataQuery, len(params.Queries))
+	for i, query := range params.Queries {
+		q, err := query.toQuery()
+		if err != nil {
+			return nil, Error.Wrap(err)
+		}
+		queries[i] = q
+	}
+
+	return &pb.FindObjectsByMetadataRequest{
+		Header:          header,
+		Bucket:          params.Bucket,
+		EncryptedPrefix: params.EncryptedPrefix,
+		EncryptedCursor: params.EncryptedCursor,
+		VersionCursor:   params.VersionCursor,
+		Limit:           params.Limit,
+		Queries:         queries,
+	}, nil
+}
+
+// FindObjectsByMetadataResponse response for FindObjectsByMetadata request.
+type FindObjectsByMetadataResponse struct {
+	Items         []RawObjectListItem
+	More          bool
+	Cursor        []byte
+	VersionCursor []byte
+}
+
+// FindObjectsByMetadataItem represents single object found by FindObjectsByMetadata request.
+type FindObjectsByMetadataItem struct {
+	EncryptedObjectKey []byte
+	Version            []byte
+	StreamID           storj.StreamID
+	ClearMetadata      map[string]string
+}
+
+func newFindObjectsByMetadataResponse(response *pb.FindObjectsByMetadataResponse) (FindObjectsByMetadataResponse, error) {
+	items := make([]RawObjectListItem, len(response.Items))
+	for i, item := range response.Items {
+		items[i] = RawObjectListItem{
+			EncryptedObjectKey: item.EncryptedObjectKey,
+			Version:            item.ObjectVersion,
+			StreamID:           item.StreamId,
+			Status:             int32(item.Status),
+			ClearMetadata:      item.ClearMetadata,
+		}
+	}
+
+	return FindObjectsByMetadataResponse{
+		Items:         items,
+		More:          response.More,
+		Cursor:        response.Cursor,
+		VersionCursor: response.VersionCursor,
+	}, nil
+}
+
+// FindObjectsByMetadata lists objects that have the requested metadata values and prefix.
+func (client *Client) FindObjectsByMetadata(ctx context.Context, params FindObjectsByMetadataParams) (_ FindObjectsByMetadataResponse, err error) {
+	defer mon.Task()(&ctx)(&err)
+
+	request, err := params.toRequest(client.header())
+	if err != nil {
+		return FindObjectsByMetadataResponse{}, Error.Wrap(err)
+	}
+
+	var response *pb.FindObjectsByMetadataResponse
+	err = WithRetry(ctx, func(ctx context.Context) error {
+		response, err = client.client.FindObjectsByMetadata(ctx, request)
+		return err
+	})
+	if err != nil {
+		return FindObjectsByMetadataResponse{}, Error.Wrap(err)
+	}
+
+	return newFindObjectsByMetadataResponse(response)
 }
 
 // ListPendingObjectStreamsParams parameters for ListPendingObjectStreams method.
